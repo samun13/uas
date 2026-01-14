@@ -3,6 +3,7 @@ import qrcode
 from rsa_utils import *
 from io import BytesIO
 import hashlib
+import json
 
 # ===============================
 # KONFIGURASI HALAMAN
@@ -47,24 +48,28 @@ if menu == "Pengirim Pesan":
                 message
             )
 
-            # SIMPAN KE SESSION
-            st.session_state.message = message
-            st.session_state.signature = signature
-            st.session_state.message_hash = message_hash
+            # PAYLOAD QR
+            payload = {
+                "message": message,
+                "hash": message_hash,
+                "signature": signature
+            }
 
-            st.success("✅ Digital Signature berhasil dibuat")
+            payload_str = json.dumps(payload)
 
-            st.markdown("### 🔑 Hash Pesan (SHA-256)")
-            st.code(message_hash)
-
-            # BUAT QR CODE DARI SIGNATURE
-            qr = qrcode.make(signature)
+            # BUAT QR CODE
+            qr = qrcode.make(payload_str)
             buf = BytesIO()
             qr.save(buf, format="PNG")
             buf.seek(0)
 
+            st.success("✅ Digital Signature berhasil dibuat")
+
+            st.markdown("### 📦 Payload QR Code")
+            st.json(payload)
+
             st.image(buf, caption="QR Code Digital Signature")
-            st.info("QR Code ini berisi Digital Signature")
+            st.info("QR Code berisi pesan, hash SHA-256, dan signature RSA")
 
 # ===============================
 # PENERIMA
@@ -73,32 +78,60 @@ if menu == "Penerima Pesan":
     st.subheader("📥 Antarmuka Penerima Pesan")
 
     st.info(
-        "Masukkan Digital Signature yang diterima dari QR Code "
-        "(hasil scan manual / tools eksternal)"
+        "Scan QR Code menggunakan aplikasi eksternal (HP / website), "
+        "lalu paste hasilnya (JSON) di bawah ini"
     )
 
-    signature = st.text_area(
-        "Digital Signature",
-        height=150,
-        value=st.session_state.get("signature", "")
+    qr_payload = st.text_area(
+        "Isi QR Code (JSON)",
+        height=220
     )
 
-    message = st.text_area(
-        "Pesan dari Pengirim (jika diubah → signature tidak valid)",
-        value=st.session_state.get("message", "")
-    )
+    if qr_payload.strip() != "":
+        try:
+            data = json.loads(qr_payload)
 
-    if st.button("Verifikasi Signature"):
-        if signature.strip() == "" or message.strip() == "":
-            st.error("Pesan dan Signature harus diisi")
-        else:
-            valid = npm_20221310083_verify_signature(
-                st.session_state.public_key,
-                message,
-                signature
+            original_message = data["message"]
+            original_hash = data["hash"]
+            signature = data["signature"]
+
+            st.markdown("### 📄 Pesan dari QR Code")
+            message_input = st.text_area(
+                "Pesan",
+                value=original_message
             )
 
-            if valid:
-                st.success("✅ Signature VALID\nPesan ASLI & tidak berubah")
-            else:
-                st.error("❌ Signature TIDAK VALID\nPesan telah dimodifikasi")
+            st.markdown("### 🔑 Hash dari QR Code")
+            hash_input = st.text_input(
+                "Hash Pesan",
+                value=original_hash
+            )
+
+            # HITUNG ULANG HASH
+            recalculated_hash = hashlib.sha256(
+                message_input.encode()
+            ).hexdigest()
+
+            st.markdown("### 🔁 Hash Pesan Saat Ini")
+            st.code(recalculated_hash)
+
+            if st.button("Verifikasi Signature"):
+                if hash_input != recalculated_hash:
+                    st.error("❌ Hash tidak cocok — pesan telah diubah")
+                else:
+                    valid = npm_20221310083_verify_signature(
+                        st.session_state.public_key,
+                        message_input,
+                        signature
+                    )
+
+                    if valid:
+                        st.success(
+                            "✅ Signature VALID\n"
+                            "Pesan ASLI, utuh, dan tidak dimodifikasi"
+                        )
+                    else:
+                        st.error("❌ Signature TIDAK VALID")
+
+        except Exception:
+            st.error("Format QR Code tidak valid (bukan JSON yang benar)")
